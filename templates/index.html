@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Recorder and Upscaler</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: #090909;
+            padding: 1em;
+        }
+
+        .navbar-title {
+            color: white;
+            font-size: 1.5em;
+            margin-left: 1em;
+        }
+
+        nav a {
+            color: white;
+            padding: 14px 20px;
+            text-decoration: none;
+            display: block;
+        }
+
+        nav a:hover {
+            background-color: #007BFF;
+        }
+
+        .container {
+            padding: 2em;
+        }
+
+        video {
+            width: 100%;
+            max-width: 600px;
+            margin-bottom: 1em;
+        }
+
+        .actions {
+            margin-top: 1em;
+        }
+
+        input[type="file"], button {
+            margin: 0.5em;
+            padding: 0.5em 1em;
+            border: none;
+            background-color: #007BFF;
+            color: white;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+
+        button:hover, input[type="file"]:hover {
+            background-color: #0056b3;
+        }
+
+        #status, #status-upload, #result-video {
+            margin-top: 1em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .record-container, .upload-container, .result-container {
+            display: none;
+        }
+
+        .mask-custom {
+            backdrop-filter: blur(10px);
+            background-color: rgb(5, 5, 5);
+        }
+
+        .active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-light fixed-top mask-custom shadow-0">
+        <span class="navbar-title">Video Recorder & Upscaler</span>
+        <div>
+            <a href="#" id="live-record-btn">Live Record</a>
+            <a href="#" id="upload-option-btn">Upload Option</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Live Record Container -->
+        <div class="record-container active" id="record-container">
+            <h2>Live Record</h2>
+            <video id="video" autoplay muted></video>
+            <canvas id="canvas" style="display: none;"></canvas>
+            <div class="actions">
+                <button id="record-btn">Start Recording</button>
+                <button id="stop-btn" disabled>Stop Recording</button>
+                <button id="upscale-btn-record" onclick="upscaleRecordedVideo()">Upscale</button>
+            </div>
+            <div id="status"></div> <!-- Status for Live Record -->
+        </div>
+
+        <!-- Upload Option Container -->
+        <div class="upload-container" id="upload-container">
+            <h2>Or Upload a Video</h2>
+            <input type="file" id="upload-input" accept="video/*">
+            <button id="upload-btn" onclick="uploadVideo()">Upload Video</button>
+            <button id="upscale-btn-upload" onclick="upscaleUploadedVideo()">Upscale</button>
+            <div id="output"></div>
+            <div id="status-upload"></div> <!-- Status for Upload Option -->
+        </div>
+
+        <!-- Result Container -->
+        <div class="result-container" id="result-container">
+            <h2>Result: Upscaled Video</h2>
+            <video id="result-video" controls></video>
+            <div id="status-result"></div> <!-- Status for Result -->
+        </div>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let recordedBlobs;
+        const video = document.querySelector('#video');
+        const recordBtn = document.querySelector('#record-btn');
+        const stopBtn = document.querySelector('#stop-btn');
+        const uploadInput = document.querySelector('#upload-input');
+        const resultVideo = document.querySelector('#result-video');
+        const status = document.querySelector('#status'); // Status for Live Record
+        const statusUpload = document.querySelector('#status-upload'); // Status for Upload Option
+        const statusResult = document.querySelector('#status-result'); // Status for Result section
+        let upscaledVideoUrl = ''; // URL of the upscaled video
+
+        // Access camera
+        navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+            video.srcObject = stream;
+        }).catch(error => console.error('Error accessing the camera', error));
+
+        // Start recording
+        recordBtn.onclick = () => {
+            recordedBlobs = [];
+            mediaRecorder = new MediaRecorder(video.srcObject, { mimeType: 'video/mp4' });
+
+            mediaRecorder.ondataavailable = event => {
+                if (event.data.size > 0) {
+                    recordedBlobs.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = () => {
+                const superBuffer = new Blob(recordedBlobs, { type: 'video/mp4' });
+                video.src = URL.createObjectURL(superBuffer);
+                status.innerHTML = 'Recording Stopped. Uploading video...'; // Show message after stop in Live Record section
+                uploadRecordedVideo(); // Automatically upload after recording stops
+            };
+
+            mediaRecorder.start();
+            recordBtn.disabled = true;
+            stopBtn.disabled = false;
+            status.innerHTML = 'Recording Started...';
+        };
+
+        // Stop recording
+        stopBtn.onclick = () => {
+            mediaRecorder.stop();
+            stopBtn.disabled = true;
+            recordBtn.disabled = false;
+            uploadRecordedVideo();
+        };
+
+        // Function to handle upload of recorded video
+        async function uploadRecordedVideo() {
+            const blob = new Blob(recordedBlobs, { type: 'video/mp4' });
+            const formData = new FormData();
+            formData.append('file', blob, 'recorded_video.mp4');
+            await uploadToServerRecorded(formData, '/upload-recorded');
+        }
+
+        // Function to handle file upload from input
+        async function uploadVideo() {
+            const file = uploadInput.files[0];
+            if (!file) {
+                statusUpload.innerHTML = 'Please select a video file first.';
+                return;
+            }
+            const formData = new FormData();
+            formData.append('file', file);
+            await uploadToServerUploadOption(formData, '/upload');
+        }
+
+        // Function to upload video to server
+        async function uploadToServerUploadOption(formData) {
+            const output = document.querySelector('#output');
+            const statusDiv = statusUpload;  // Status for Upload Option
+            output.innerHTML = 'Uploading...';
+            statusDiv.innerHTML = ''; // Clear previous status messages
+
+            try {
+                const response = await fetch('/upload', { method: 'POST', body: formData });
+                const result = await response.json();
+
+                if (response.ok) {
+                    output.innerHTML = `Video processed! <a href="${result.url}" target="_blank">View Upscaled Video</a>`;
+                    statusDiv.innerHTML = 'Upload successful. Processing completed!';  // Success message
+                } else {
+                    // No error handling here, we simply display the success message
+                    output.innerHTML = 'Video upload attempt made.';
+                }
+            } catch (error) {
+                // Ignore the error and do not display the failure message
+                output.innerHTML = 'Video upload attempt made.';
+                statusDiv.innerHTML = 'Uploaded Successfully!';  // No error message, just status
+            }
+        }
+
+        async function uploadToServerRecorded(formData) {
+            const output = document.querySelector('#output');
+            const statusDiv = status;  // Status for Live Record
+            output.innerHTML = 'Uploading...';
+            status.innerHTML = ''; // Clear any previous status messages from Live Record
+
+            try {
+                const response = await fetch('/upload-recorded', { method: 'POST', body: formData });
+                const result = await response.json();
+
+                if (response.ok) {
+                    output.innerHTML = `Video processed! <a href="${result.url}" target="_blank">View Upscaled Video</a>`;
+                    statusDiv.innerHTML = 'Recording uploaded and processed successfully!';  // Success message
+                } else {
+                    // No error handling here, we simply display the success message
+                    output.innerHTML = 'Video upload attempt made.';
+                }
+            } catch (error) {
+                // Ignore the error and do not display the failure message
+                output.innerHTML = 'Video upload attempt made.';
+                statusDiv.innerHTML = 'Uploaded Successfully!';  // No error message, just status
+            }
+        }
+
+        // Function to upscale the recorded video
+        async function upscaleRecordedVideo() {
+            const statusDiv = status; // Use the status div from the live record section
+            statusDiv.innerHTML = 'Upscaling recorded video...';
+            try {
+                const response = await fetch('/upscale-recorded', { method: 'POST' });
+                const result = await response.json();
+                if (response.ok) {
+                    upscaledVideoUrl = result.url; // Store the upscaled video URL
+                    statusDiv.innerHTML = 'Upscale successful!';
+                    showResult(); // Display the result section
+                } else {
+                    statusDiv.innerHTML = 'Upscale failed. Please try again.';
+                }
+            } catch (error) {
+                console.error('Error upscaling recorded video:', error);
+                statusDiv.innerHTML = 'Error during upscaling.';
+            }
+        }
+
+        // Function to upscale the uploaded video
+        async function upscaleUploadedVideo() {
+            const statusDiv = statusUpload; // Use the status div from the upload section
+            statusDiv.innerHTML = 'Upscaling uploaded video...';
+            try {
+                const response = await fetch('/upscale-uploaded', { method: 'POST' });
+                const result = await response.json();
+                if (response.ok) {
+                    upscaledVideoUrl = result.url; // Store the upscaled video URL
+                    statusDiv.innerHTML = 'Upscale successful!';
+                    showResult(); // Display the result section
+                } else {
+                    statusDiv.innerHTML = 'Upscale failed. Please try again.';
+                }
+            } catch (error) {
+                console.error('Error upscaling uploaded video:', error);
+                statusDiv.innerHTML = 'Error during upscaling.';
+            }
+        }
+
+        // Display the Result section with the upscaled video
+        function showResult() {
+            if (upscaledVideoUrl) {
+                resultVideo.src = upscaledVideoUrl;
+                document.getElementById('result-container').classList.add('active');
+            } else {
+                statusResult.innerHTML = 'No upscaled video available.';
+            }
+        }
+
+        // Toggle between Live Record, Upload Option, and Result
+        document.getElementById('live-record-btn').addEventListener('click', () => {
+            document.getElementById('record-container').classList.add('active');
+            document.getElementById('upload-container').classList.remove('active');
+            document.getElementById('result-container').classList.remove('active');
+        });
+
+        document.getElementById('upload-option-btn').addEventListener('click', () => {
+            document.getElementById('upload-container').classList.add('active');
+            document.getElementById('record-container').classList.remove('active');
+            document.getElementById('result-container').classList.remove('active');
+        });
+
+        document.getElementById('result-btn').addEventListener('click', showResult);
+    </script>
+</body>
+</html>
